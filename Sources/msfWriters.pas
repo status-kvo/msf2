@@ -1,0 +1,708 @@
+﻿unit msfWriters;
+
+interface
+
+uses
+  SysUtils, Classes, Generics.Collections,
+  msfErrors, msfIOUtils;
+
+type
+  cWriter = class abstract
+   protected
+    var fSource: TStream;
+   private
+    var fIsOwner: Boolean;
+   public
+    type tItemKind = (ikObject, ikArray, ikPair, ikComment, ikBool, ikString, ikFloat, ikInt, ikDate, ikTime, ikDateTime, ikNull, ikUndefined);
+   public
+    type tItemKinds = set of tItemKind;
+   protected
+    type rItem = record
+     public
+      Child: NativeUInt;
+      Kind: tItemKind;
+     public
+      procedure AddChild(const aCount: NativeUInt);
+    end;
+   protected
+    type tItemP = ^rItem;
+   protected
+    type cItems = tList<rItem>;
+   protected
+    fItems: cItems;
+   protected
+    procedure innerWriteStringRaw(const aRaw: RawByteString);
+   protected
+    function innerWriteObjectStart: Boolean; virtual;
+    function innerWriteObjectEnd: Boolean; virtual;
+    function innerWriteArrayStart: Boolean; virtual;
+    function innerWriteArrayEnd: Boolean; virtual;
+    function innerWritePairStart: Boolean; virtual;
+    function innerWritePairEnd: Boolean; virtual;
+    function innerWriteCommentStart: Boolean; virtual;
+    function innerWriteCommentEnd: Boolean; virtual;
+    function innerWriteNull: Boolean; virtual;
+    function innerWriteUndefined: Boolean; virtual;
+    function innerWriteBool(const aValue: Boolean): Boolean; virtual;
+    function innerWriteChar(const aChar: Char): Boolean; virtual;
+    function innerWriteString(const aString: String): Boolean; virtual;
+    function innerWriteInt08S(const aValue: Int8): Boolean; virtual;
+    function innerWriteInt08U(const aValue: UInt8): Boolean; virtual;
+    function innerWriteInt16S(const aValue: Int16): Boolean; virtual;
+    function innerWriteInt16U(const aValue: UInt16): Boolean; virtual;
+    function innerWriteInt32S(const aValue: Int32): Boolean; virtual;
+    function innerWriteInt32U(const aValue: UInt32): Boolean; virtual;
+    function innerWriteInt64S(const aValue: Int64): Boolean; virtual;
+    function innerWriteInt64U(const aValue: UInt64): Boolean; virtual;
+    function innerWriteIntS(const aValue: NativeInt): Boolean; virtual;
+    function innerWriteIntU(const aValue: NativeUInt): Boolean; virtual;
+    function innerWriteSingle(const aValue: Single): Boolean; virtual;
+    function innerWriteDouble(const aValue: Double): Boolean; virtual;
+    function innerWriteExtended(const aValue: Extended): Boolean; virtual;
+    function innerWriteDateTime(const aDateTime: TDateTime): Boolean; virtual;
+    function innerWriteDate(const aDate: TDate): Boolean; virtual;
+    function innerWriteTime(const aTime: TTime): Boolean; virtual;
+   public
+    /// <summary> Записать начало объекта </summary>
+    procedure WriteObjectStart;
+    /// <summary> Записать окончания объекта </summary>
+    procedure WriteObjectEnd;
+   public
+    /// <summary> Записать начала массива </summary>
+    procedure WriteArrayStart;
+    /// <summary> Записать окончания массива </summary>
+    procedure WriteArrayEnd;
+   public
+    /// <summary> Записать начала массива </summary>
+    procedure WritePairStart;
+    /// <summary> Записать окончания массива </summary>
+    procedure WritePairEnd;
+   public
+    /// <summary> Записать начала комментария </summary>
+    procedure WriteCommentStart;
+    /// <summary> Записать окончания комментария </summary>
+    procedure WriteCommentEnd;
+   public
+    /// <summary> Записать значения типа Null </summary>
+    procedure WriteNull; virtual;
+    /// <summary> Записать не определенное значения </summary>
+    procedure WriteUndefined; virtual;
+   public
+    /// <summary> Записать логическое значение </summary>
+    procedure WriteBool(const aValue: Boolean); virtual;
+   public
+    /// <summary> Записать символ </summary>
+    procedure WriteChar(const aChar: Char); virtual;
+    /// <summary> Записать строку </summary>
+    procedure WriteString(const aString: String); virtual;
+   public
+    /// <summary> Записать Int8 </summary>
+    procedure WriteInt08S(const aValue: Int8); virtual;
+    /// <summary> Записать UInt8 </summary>
+    procedure WriteInt08U(const aValue: UInt8); virtual;
+   public
+    /// <summary> Записать Int16 </summary>
+    procedure WriteInt16S(const aValue: Int16); virtual;
+    /// <summary> Записать UInt16 </summary>
+    procedure WriteInt16U(const aValue: UInt16); virtual;
+   public
+    /// <summary> Записать Int32 </summary>
+    procedure WriteInt32S(const aValue: Int32); virtual;
+    /// <summary> Записать UInt32 </summary>
+    procedure WriteInt32U(const aValue: UInt32); virtual;
+   public
+    /// <summary> Записать Int64 </summary>
+    procedure WriteInt64S(const aValue: Int64); virtual;
+    /// <summary> Записать UInt64 </summary>
+    procedure WriteInt64U(const aValue: UInt64); virtual;
+   public
+    /// <summary> Записать NativeInt </summary>
+    procedure WriteIntS(const aValue: NativeInt);
+    /// <summary> Записать NativeUInt </summary>
+    procedure WriteIntU(const aValue: NativeUInt);
+   public
+    /// <summary> Записать Single </summary>
+    procedure WriteSingle(const aValue: Single); virtual;
+    /// <summary> Записать Double </summary>
+    procedure WriteDouble(const aValue: Double); virtual;
+    /// <summary> Записать Extended </summary>
+    procedure WriteExtended(const aValue: Extended); virtual;
+   public
+    /// <summary> Записать дату и время </summary>
+    procedure WriteDateTime(const aDateTime: TDateTime); virtual;
+    /// <summary> Записать дату </summary>
+    procedure WriteDate(const aDate: TDate); virtual;
+    /// <summary> Записать время </summary>
+    procedure WriteTime(const aTime: TTime); virtual;
+   protected
+    function innerAccessItem: tItemKinds; virtual; abstract;
+   public
+    procedure CloseItems(const aIsToRoot: Boolean);
+   public
+    property Source: TStream read fSource;
+   public
+    function Size: UInt64;
+   public
+    function LastCommandChildCount: NativeUInt;
+   public
+    function ItemKindName(const aKind: tItemKind): String; virtual;
+   public
+    procedure CloseToRoot;
+   public
+    procedure Assign(aSource: cWriter; const aAddChild: NativeUInt = 0);
+   public
+    constructor Create(aSource: TStream; const aIsOwner: Boolean);
+    constructor CreateFromFileStream(const aPath: String);
+    destructor Destroy; override;
+  end;
+
+implementation
+
+{ cWriter }
+
+procedure cWriter.CloseToRoot;
+begin
+  CloseItems(True)
+end;
+
+constructor cWriter.Create(aSource: TStream; const aIsOwner: Boolean);
+begin
+  inherited Create;
+
+  fSource := aSource;
+  fIsOwner := aIsOwner;
+
+  fItems := cItems.Create;
+end;
+
+constructor cWriter.CreateFromFileStream(const aPath: String);
+ var
+  LStream: TStream;
+begin
+  LStream := nil;
+  try
+    LStream := rFile.OpenRead(aPath);
+    Create(LStream, True);
+    LStream := nil;
+  finally
+    LStream.Free
+  end;
+end;
+
+destructor cWriter.Destroy;
+begin
+  CloseItems(False);
+  fItems.Free;
+  fItems := nil;
+
+  if fIsOwner then
+    fSource.Free;
+  fSource := nil;
+  inherited;
+end;
+
+procedure cWriter.Assign(aSource: cWriter; const aAddChild: NativeUInt);
+ var
+  LPosition: Int64;
+  LItem: rItem;
+begin
+  if (aSource = nil) then
+    Exit;
+  LPosition := aSource.fSource.Position;
+  try
+    aSource.fSource.Position := 0;
+    fSource.CopyFrom(aSource.fSource, aSource.fSource.Size - aSource.fSource.Position);
+    if (fItems.Count > 0) then
+    begin
+      if (aAddChild > 0) then
+      begin
+        LItem := fItems[Pred(fItems.Count)];
+        LItem.AddChild(aAddChild);
+        fItems[Pred(fItems.Count)] := LItem;
+      end;
+    end;
+    for LItem in aSource.fItems do
+      fItems.Add(LItem)
+  finally
+    aSource.fSource.Position := LPosition;
+  end;
+end;
+
+procedure cWriter.CloseItems(const aIsToRoot: Boolean);
+ var
+  LIndex, LFirst: NativeInt;
+  LItem: rItem;
+begin
+  LFirst := NativeInt(aIsToRoot);
+  for LIndex := Pred(fItems.Count) downto LFirst do
+  begin
+    LItem := fItems[LIndex];
+
+    case LItem.Kind of
+      ikObject:           innerWriteObjectEnd;
+      ikArray:            innerWriteArrayEnd;
+      ikPair:             innerWritePairEnd;
+      ikComment:          innerWriteCommentEnd;
+      ikString, ikFloat, ikInt, ikBool, ikDate, ikTime, ikDateTime, ikNull, ikUndefined: ;
+      else
+        raise Exception.CreateFmt(rsUnknownType, [IntToStr(NativeInt(LItem.Kind))]);
+    end;
+  end;
+
+  if (aIsToRoot = False) then
+    fItems.Clear
+end;
+
+function cWriter.innerWriteArrayEnd: Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWriteArrayStart: Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWriteBool(const aValue: Boolean): Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWriteChar(const aChar: Char): Boolean;
+begin
+  Result := innerWriteString(aChar)
+end;
+
+function cWriter.innerWriteCommentEnd: Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWriteCommentStart: Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWriteDate(const aDate: TDate): Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWriteDateTime(const aDateTime: TDateTime): Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWriteDouble(const aValue: Double): Boolean;
+begin
+  Result := innerWriteExtended(aValue)
+end;
+
+function cWriter.innerWriteExtended(const aValue: Extended): Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWriteInt08S(const aValue: Int8): Boolean;
+begin
+  if (SizeOf(NativeInt) = 8) then
+    Result := innerWriteInt64S(aValue)
+  else
+    Result := innerWriteInt32S(aValue)
+end;
+
+function cWriter.innerWriteInt08U(const aValue: UInt8): Boolean;
+begin
+  if (SizeOf(NativeInt) = 8) then
+    Result := innerWriteInt64U(aValue)
+  else
+    Result := innerWriteInt32U(aValue)
+end;
+
+function cWriter.innerWriteInt16S(const aValue: Int16): Boolean;
+begin
+  if (SizeOf(NativeInt) = 8) then
+    Result := innerWriteInt64S(aValue)
+  else
+    Result := innerWriteInt32S(aValue)
+end;
+
+function cWriter.innerWriteInt16U(const aValue: UInt16): Boolean;
+begin
+  if (SizeOf(NativeInt) = 8) then
+    Result := innerWriteInt64U(aValue)
+  else
+    Result := innerWriteInt32U(aValue)
+end;
+
+function cWriter.innerWriteInt32S(const aValue: Int32): Boolean;
+begin
+  if (SizeOf(NativeInt) = 8) then
+    Result := innerWriteInt64S(aValue)
+  else
+    Result := False
+end;
+
+function cWriter.innerWriteInt32U(const aValue: UInt32): Boolean;
+begin
+  if (SizeOf(NativeInt) = 8) then
+    Result := innerWriteInt64U(aValue)
+  else
+    Result := False
+end;
+
+function cWriter.innerWriteInt64S(const aValue: Int64): Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWriteInt64U(const aValue: UInt64): Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWriteIntS(const aValue: NativeInt): Boolean;
+begin
+  if (SizeOf(NativeInt) = 8) then
+    Result := innerWriteInt64S(aValue)
+  else
+    Result := innerWriteInt32S(aValue)
+end;
+
+function cWriter.innerWriteIntU(const aValue: NativeUInt): Boolean;
+begin
+  if (SizeOf(NativeInt) = 8) then
+    Result := innerWriteInt64U(aValue)
+  else
+    Result := innerWriteInt32U(aValue)
+end;
+
+function cWriter.innerWriteNull: Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWriteObjectEnd: Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWriteObjectStart: Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWritePairEnd: Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWritePairStart: Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWriteSingle(const aValue: Single): Boolean;
+begin
+  Result := innerWriteExtended(aValue)
+end;
+
+function cWriter.innerWriteString(const aString: String): Boolean;
+begin
+  Result := False
+end;
+
+procedure cWriter.innerWriteStringRaw(const aRaw: RawByteString);
+begin
+  if (Length(aRaw) = 0) then
+    Exit;
+  fSource.WriteBuffer(PAnsiChar(aRaw)^, Length(aRaw));
+end;
+
+function cWriter.innerWriteTime(const aTime: TTime): Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.innerWriteUndefined: Boolean;
+begin
+  Result := False
+end;
+
+function cWriter.ItemKindName(const aKind: tItemKind): String;
+begin
+  case aKind of
+    ikObject:    Result := rsObject;
+    ikArray:     Result := rsArray;
+    ikPair:      Result := rsPair;
+    ikComment:   Result := rsComment;
+    ikBool:      Result := rsBool;
+    ikString:    Result := rsString;
+    ikFloat:     Result := rsFloat;
+    ikInt:       Result := rsInt;
+    ikDate:      Result := rsDate;
+    ikTime:      Result := rsTime;
+    ikDateTime:  Result := rsDateTime;
+    ikNull:      Result := rsNull;
+    ikUndefined: Result := rsUndefined;
+    else
+      raise Exception.CreateFmt(rsPairCannotBeAddedTo, [IntToStr(NativeInt(aKind))]);
+  end;
+end;
+
+function cWriter.LastCommandChildCount: NativeUInt;
+begin
+  if (fItems.Count = 0) then
+  begin
+    Result := 0;
+    Exit;
+  end;
+
+  Result := fItems[Pred(fItems.Count)].Child
+end;
+
+function cWriter.Size: UInt64;
+begin
+  Result := UInt64(fSource.Size)
+end;
+
+procedure cWriter.WriteArrayEnd;
+begin
+  if (ikArray in innerAccessItem) then
+    if (innerWriteArrayEnd) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteArrayEnd'])
+end;
+
+procedure cWriter.WriteArrayStart;
+begin
+  if (ikArray in innerAccessItem) then
+    if (innerWriteArrayStart) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteArrayStart'])
+end;
+
+procedure cWriter.WriteBool(const aValue: Boolean);
+begin
+  if (ikBool in innerAccessItem) then
+    if (innerWriteBool(aValue)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteBool'])
+end;
+
+procedure cWriter.WriteChar(const aChar: Char);
+begin
+  if (ikString in innerAccessItem) then
+    if (innerWriteChar(aChar)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteChar'])
+end;
+
+procedure cWriter.WriteCommentEnd;
+begin
+  if (ikComment in innerAccessItem) then
+    if (innerWriteCommentEnd) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteCommentEnd'])
+end;
+
+procedure cWriter.WriteCommentStart;
+begin
+  if (ikComment in innerAccessItem) then
+    if (innerWriteCommentStart) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteCommentStart'])
+end;
+
+procedure cWriter.WriteDate(const aDate: TDate);
+begin
+  if (ikDate in innerAccessItem) then
+    if (innerWriteDate(aDate)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteDate'])
+end;
+
+procedure cWriter.WriteDateTime(const aDateTime: TDateTime);
+begin
+  if (ikDateTime in innerAccessItem) then
+    if (innerWriteDateTime(aDateTime)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteDateTime'])
+end;
+
+procedure cWriter.WriteDouble(const aValue: Double);
+begin
+  if (ikFloat in innerAccessItem) then
+    if (innerWriteDouble(aValue)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteDouble'])
+end;
+
+procedure cWriter.WriteExtended(const aValue: Extended);
+begin
+  if (ikFloat in innerAccessItem) then
+    if (innerWriteExtended(aValue)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteExtended'])
+end;
+
+procedure cWriter.WriteInt08S(const aValue: Int8);
+begin
+  if (ikInt in innerAccessItem) then
+    if (innerWriteInt08S(aValue)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteInt08S'])
+end;
+
+procedure cWriter.WriteInt08U(const aValue: UInt8);
+begin
+  if (ikInt in innerAccessItem) then
+    if (innerWriteInt08U(aValue)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteInt08U'])
+end;
+
+procedure cWriter.WriteInt16S(const aValue: Int16);
+begin
+  if (ikInt in innerAccessItem) then
+    if (innerWriteInt16S(aValue)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteInt16S'])
+end;
+
+procedure cWriter.WriteInt16U(const aValue: UInt16);
+begin
+  if (ikInt in innerAccessItem) then
+    if (innerWriteInt16U(aValue)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteInt16U'])
+end;
+
+procedure cWriter.WriteInt32S(const aValue: Int32);
+begin
+  if (ikInt in innerAccessItem) then
+    if (innerWriteInt32U(aValue)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteInt32S'])
+end;
+
+procedure cWriter.WriteInt32U(const aValue: UInt32);
+begin
+  if (ikInt in innerAccessItem) then
+    if (innerWriteInt32U(aValue)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteInt32U'])
+end;
+
+procedure cWriter.WriteInt64S(const aValue: Int64);
+begin
+  if (ikInt in innerAccessItem) then
+    if (innerWriteInt64S(aValue)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteInt64S'])
+end;
+
+procedure cWriter.WriteInt64U(const aValue: UInt64);
+begin
+  if (ikInt in innerAccessItem) then
+    if (innerWriteInt64U(aValue)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteInt64U'])
+end;
+
+procedure cWriter.WriteIntS(const aValue: NativeInt);
+begin
+  if (ikInt in innerAccessItem) then
+    if (innerWriteIntS(aValue)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteIntS'])
+end;
+
+procedure cWriter.WriteIntU(const aValue: NativeUInt);
+begin
+  if (ikInt in innerAccessItem) then
+    if (innerWriteIntU(aValue)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteIntU'])
+end;
+
+procedure cWriter.WriteNull;
+begin
+  if (ikNull in innerAccessItem) then
+    if (innerWriteNull) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteNull'])
+end;
+
+procedure cWriter.WriteObjectEnd;
+begin
+  if (ikObject in innerAccessItem) then
+    if (innerWriteObjectEnd) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteObjectEnd'])
+end;
+
+procedure cWriter.WriteObjectStart;
+begin
+  if (ikObject in innerAccessItem) then
+    if (innerWriteObjectStart) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteObjectStart'])
+end;
+
+procedure cWriter.WritePairEnd;
+begin
+  if (ikPair in innerAccessItem) then
+    if (innerWritePairEnd) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WritePairEnd'])
+end;
+
+procedure cWriter.WritePairStart;
+begin
+  if (ikPair in innerAccessItem) then
+    if (innerWritePairStart) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WritePairStart'])
+end;
+
+procedure cWriter.WriteSingle(const aValue: Single);
+begin
+  if (ikFloat in innerAccessItem) then
+    if (innerWriteSingle(aValue)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteSingle'])
+end;
+
+procedure cWriter.WriteString(const aString: String);
+begin
+  if (ikString in innerAccessItem) then
+    if (innerWriteString(aString)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteString'])
+end;
+
+procedure cWriter.WriteTime(const aTime: TTime);
+begin
+  if (ikTime in innerAccessItem) then
+    if (innerWriteTime(aTime)) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteTime'])
+end;
+
+procedure cWriter.WriteUndefined;
+begin
+  if (ikUndefined in innerAccessItem) then
+    if (innerWriteUndefined) then
+      Exit;
+  raise Exception.CreateFmt(rsPropertyNotSupport, [Self.Classname + '.WriteUndefined'])
+end;
+
+{ cWriter.rItem }
+
+procedure cWriter.rItem.AddChild(const aCount: NativeUInt);
+begin
+  Child := Child + aCount
+end;
+
+end.

@@ -1,0 +1,95 @@
+﻿unit msfParams;
+
+{$INCLUDE msfBase.inc}
+
+{$IFDEF SUPPORTS_SECTION_INTERFACE}
+interface
+{$ENDIF}
+
+uses
+  Types, SysUtils, Classes,
+  msfTypes,
+  msfSimple;
+
+type
+  cParams = class(cSimple)
+   public
+    var UserData: TObject;
+   public
+    destructor Destroy; override;
+  end;
+
+function GetParamInput: TStrings;
+function GenerateFileName(const aMask, aIdent, aGuid, aFileName: String): String;
+function ParamExtract(aParams: TStrings; const aFull, aShort: String; const aIsDeQuoted: Boolean = False): String;
+
+implementation
+
+{ cParams }
+
+destructor cParams.Destroy;
+begin
+  try
+    UserData.Free;
+  finally
+    UserData := nil;
+    inherited
+  end;
+end;
+
+function GetParamInput: TStrings;
+ var
+  LIndex: NativeInt;
+  LKey: String;
+  LPair: TStringDynArray;
+begin
+  Result := TStringList.Create;
+  for LIndex := 1 to ParamCount do
+  begin
+    LKey := ParamStr(LIndex);
+    LPair := LKey.Split(['=']);
+    if (Length(LPair) = 2) then
+      Result.Values[LPair[0]] := LPair[1]
+    else
+      Result.Add(LKey);
+  end;
+end;
+
+function GenerateFileName(const aMask, aIdent, aGuid, aFileName: String): String;
+ var
+  LIndex: NativeInt;
+  LDateTime: String;
+begin
+  LIndex := 0;
+  while (LIndex < 10) do
+  begin
+    LDateTime := FormatDateTime('YYYYMMDDhhnnsszzz', now);
+    Result := Format(aMask, [aIdent, LDateTime, aGuid, aFileName]);
+    if (FileExists(Result) = False) then
+      Exit;
+    Inc(LIndex);
+  end;
+  Result := ''
+end;
+
+function ParamExtract(aParams: TStrings; const aFull, aShort: String; const aIsDeQuoted: Boolean): String;
+begin
+  try
+    Result := aParams.Values['--' + aFull];
+    if (Result > '') then
+      Exit;
+    if (aShort = '') then
+      Exit;
+    Result := aParams.Values['-' + aShort];
+    if (Result > '') then
+      Exit;
+    if (aParams.IndexOf('--' + aFull)  > -1) then
+      Result := aFull
+  finally
+    if aIsDeQuoted then
+      if Result > '' then
+        Result := Result.DeQuotedString.DeQuotedString('"')
+  end;
+end;
+
+end.

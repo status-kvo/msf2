@@ -1,0 +1,422 @@
+﻿unit msfWritersJson;
+
+interface
+
+uses
+  SysUtils,
+  msfErrors,
+  msfWriters, msfWritersText;
+
+{$DEFINE JSON_UTF8}
+
+type
+  cWriterJson = class abstract(cWriterText)
+   protected
+    function innerStringEscapedRaw(const aValue: String): RawByteString;
+   protected
+    procedure innerWriteStringIsQuoted(aString: String; const aIsQuotedString: Boolean);
+    function innerAddItem(const aKind: cWriter.tItemKind; const aValue: String; const aIsQuotedString: Boolean): Boolean;
+    function innerCheckAndClose(const aKind: cWriter.tItemKind; const aFixedQuantity: NativeInt; const aValue: String;
+      const aIsQuotedString: Boolean; const aMethodName: String): Boolean;
+   protected
+    function innerWriteObjectStart: Boolean; override;
+    function innerWriteObjectEnd: Boolean; override;
+    function innerWriteArrayStart: Boolean; override;
+    function innerWriteArrayEnd: Boolean; override;
+    function innerWritePairStart: Boolean; override;
+    function innerWritePairEnd: Boolean; override;
+    function innerWriteNull: Boolean; override;
+    function innerWriteBool(const aValue: Boolean): Boolean; override;
+    function innerWriteChar(const aChar: Char): Boolean; override;
+    function innerWriteString(const aString: String): Boolean; override;
+    function innerWriteInt32S(const aValue: Int32): Boolean; override;
+    function innerWriteInt32U(const aValue: UInt32): Boolean; override;
+    function innerWriteInt64S(const aValue: Int64): Boolean; override;
+    function innerWriteInt64U(const aValue: UInt64): Boolean; override;
+    function innerWriteExtended(const aValue: Extended): Boolean; override;
+    function innerWriteDateTime(const aDateTime: TDateTime): Boolean; override;
+    function innerWriteDate(const aDate: TDate): Boolean; override;
+    function innerWriteTime(const aTime: TTime): Boolean; override;
+   protected
+    function innerAccessItem: cWriter.tItemKinds; override;
+   public
+    procedure WritePairString(const aKey, aValue: String);
+    procedure WritePairNull(const aKey: String);
+    procedure WritePairBool(const aKey: String; const aValue: Boolean);
+    procedure WritePairIntS(const aKey: String; const aValue: Int64);
+    procedure WritePairIntU(const aKey: String; const aValue: UInt64);
+    procedure WritePairFloat(const aKey: String; const aValue: Extended);
+  end;
+
+type
+  cWriterJsonSealed = class sealed(cWriterJson);
+
+implementation
+
+{ cWriterJson }
+
+function cWriterJson.innerAccessItem: cWriter.tItemKinds;
+begin
+  Result := [ikObject, ikArray, ikPair, ikBool, ikString, ikFloat, ikInt, ikDate, ikTime, ikDateTime, ikNull]
+end;
+
+function cWriterJson.innerAddItem(const aKind: cWriter.tItemKind; const aValue: String; const aIsQuotedString: Boolean): Boolean;
+ var
+  LIndex: NativeInt;
+  LItem: rItem;
+begin
+  if (fItems.Count > 0) then
+  begin
+
+    LIndex := Pred(fItems.Count);
+    LItem := fItems.Items[LIndex];
+    if (LItem.Kind in [ikArray, ikObject]) then
+    begin
+      LItem.Child := LItem.Child + 1;
+      if (LItem.Child > 1) then
+        innerWriteStringIsQuoted(',', False);
+    end
+    else if ((LItem.Kind = ikPair) and (LItem.Child < 2)) then
+    begin
+      if (LItem.Child = 1) then
+        innerWriteStringIsQuoted(':', False);
+      LItem.Child := LItem.Child + 1
+    end
+    else
+      raise Exception.CreateFmt(rsObjectCannotBeAddedTo, [ItemKindName(LItem.Kind)]);
+    fItems[LIndex] := LItem;
+
+    if (LItem.Kind = ikPair) then
+      if (LItem.Child = 1) then
+        if (aKind <> ikString) then
+          raise Exception.CreateFmt(rsPairKeyOnlyStringKind, [ItemKindName(LItem.Kind)]);
+
+    if (LItem.Kind = ikObject) then
+      if (aKind <> ikPair) then
+        raise Exception.CreateFmt(rsObjectOnlyPairKind, [ItemKindName(LItem.Kind)]);
+
+  end;
+
+  if (aKind in [ikObject, ikArray, ikPair]) then
+  begin
+    LItem.Child := 0;
+    LItem.Kind := aKind;
+    fItems.Add(LItem);
+  end;
+
+  innerWriteStringIsQuoted(aValue, aIsQuotedString);
+  Result := True;
+end;
+
+function cWriterJson.innerCheckAndClose(const aKind: cWriter.tItemKind; const aFixedQuantity: NativeInt; const aValue: String;
+  const aIsQuotedString: Boolean; const aMethodName: String): Boolean;
+ var
+  LItem: rItem;
+  LIndex: NativeInt;
+begin
+  if (fItems.Count > 0) then
+  begin
+    LIndex := Pred(fItems.Count);
+    LItem := fItems[LIndex];
+
+    if (LItem.Kind = aKind) then
+    begin
+      if (aFixedQuantity > -1) then
+        if (LItem.Child <> aFixedQuantity) then
+          raise Exception.CreateFmt(rsFixedQuantityError, [LItem.Child, aFixedQuantity, Self.Classname + '.' + aMethodName]);
+
+      innerWriteStringIsQuoted(aValue, aIsQuotedString);
+      fItems.Delete(LIndex);
+      Result := True;
+      Exit;
+    end
+  end;
+
+  raise Exception.CreateFmt(rsTheLogicalChainIsBroken, [Self.Classname + '.' + aMethodName]);
+end;
+
+function cWriterJson.innerWriteArrayEnd: Boolean;
+begin
+  Result := innerCheckAndClose(ikArray, -1, ']', False, 'innerWriteArrayEnd')
+end;
+
+function cWriterJson.innerWriteArrayStart: Boolean;
+begin
+  Result := innerAddItem(ikArray, '[', False)
+end;
+
+function cWriterJson.innerWriteBool(const aValue: Boolean): Boolean;
+ var
+  LString: String;
+begin
+  if aValue then
+    LString := 'true'
+  else
+    LString := 'false';
+
+  Result := innerAddItem(ikBool, LString, False);
+end;
+
+function cWriterJson.innerWriteChar(const aChar: Char): Boolean;
+begin
+  Result := innerAddItem(ikString, aChar, True)
+end;
+
+function cWriterJson.innerWriteDate(const aDate: TDate): Boolean;
+begin
+  Result := innerAddItem(ikDate, FormatDateTime('yyyy-mm-dd', aDate), True)
+end;
+
+function cWriterJson.innerWriteDateTime(const aDateTime: TDateTime): Boolean;
+begin
+  Result := innerAddItem(ikDateTime, FormatDateTime('yyyy-mm-dd hh:nn:ss', aDateTime), True)
+end;
+
+function cWriterJson.innerStringEscapedRaw(const aValue: String): RawByteString;
+var
+  P, PEnd: PChar;
+  C: Char;
+  {$IFDEF JSON_UTF8}
+  Codepoint: UInt32;
+  {$ENDIF}
+begin
+  P := PChar(aValue);
+  PEnd := P + Length(aValue);
+  Result := '';
+
+  while (P < PEnd) do
+  begin
+    C := P^;
+    case C of
+      '"', '\':
+        begin
+          Result := Result + '\';
+          Result := Result + RawByteString(C);
+        end;
+
+       #8: Result := Result + '\b';
+       #9: Result := Result + '\t';
+      #10: Result := Result + '\n';
+      #12: Result := Result + '\f';
+      #13: Result := Result + '\r';
+    else
+      {$IFDEF JSON_UTF8}
+      if (C < ' ') then
+      begin
+        Result := Result + '\u';
+        Result := Result + RawByteString(LowerCase(IntToHex(Ord(C), 4)));
+      end
+      else
+      if (C >= #$80) then
+      begin
+        Result := Result + '\u';
+        Codepoint := Ord(C);
+
+        { Start of 2, 3 or 4-byte UTF8 sequence }
+        if ((Codepoint shr 5) = $06) and ((P + 1) < PEnd) then
+        begin
+          Inc(P);
+          Codepoint := ((Codepoint shl 6) and $7FF) + (Ord(P^) and $3F);
+          Result := Result + LowerCase(IntToHex(Codepoint, 4)));
+        end
+        else if ((Codepoint shr 4) = $0E) and ((P + 2) < PEnd) then
+        begin
+          Inc(P);
+          Codepoint := ((Codepoint shl 12) and $FFFF) + ((Ord(P^) shl 6) and $FFF);
+          Inc(P);
+          Inc(Codepoint, Ord(P^) and $3F);
+
+          Assert(Codepoint <= $FFFF);
+          Result := Result + LowerCase(IntToHex(Codepoint, 4));
+        end else if ((P + 3) < PEnd) then
+        begin
+          { Surrogate pair }
+          Assert((Codepoint shr 3) = $1E);
+          Inc(P);
+          Codepoint := ((Codepoint shl 18) and $1FFFFF) + ((Ord(P^) shl 12) and $3FFFF);
+          Inc(P);
+          Inc(Codepoint, (Ord(P^) shl 6) and $FFF);
+          Inc(P);
+          Inc(Codepoint, Ord(P^) and $3F);
+
+          Assert(Codepoint > $FFFF);
+          Result := Result + LowerCase(IntToHex($D7C0 + (Codepoint shr 10), 4));
+          Result := Result + LowerCase(IntToHex($DC00 + (Codepoint and $3FF), 4));
+        end;
+      end
+      {$ELSE}
+      if (C < ' ') or (C >= #$0080) then
+      begin
+        Result := Result + '\u';
+        Result := Result + RawByteString(LowerCase(IntToHex(Ord(C), 4)));
+      end
+      {$ENDIF}
+      else
+        Result := Result + RawByteString(C);
+    end;
+    Inc(P);
+  end;
+end;
+
+function cWriterJson.innerWriteExtended(const aValue: Extended): Boolean;
+ var
+  LFormatSettings: tFormatSettings;
+  LValue: String;
+  LInt64: Int64;
+begin
+  LFormatSettings := FormatSettings;
+  LFormatSettings.DecimalSeparator := '.';
+  LFormatSettings.ThousandSeparator := ',';
+
+  {$IFDEF JSON_UTF8}
+  LValue := FloatToStr(aValue, LFormatSettings);
+  {$ELSE}
+  LValue := FloatToStr(aValue, LFormatSettings);
+  {$ENDIF}
+
+  if (LValue = 'NAN') then
+    LValue := 'NaN'
+  else if (LValue = 'INF') then
+    LValue := 'Infinity'
+  else if (LValue = '-INF') then
+    LValue := '-Infinity'
+  else if (TryStrToInt64(LValue, LInt64)) then
+    LValue := LValue + '.0';
+
+  Result := innerAddItem(ikFloat, LValue, False)
+end;
+
+function cWriterJson.innerWriteInt32S(const aValue: Int32): Boolean;
+begin
+  Result := innerAddItem(ikInt, IntToStr(aValue), False)
+end;
+
+function cWriterJson.innerWriteInt32U(const aValue: UInt32): Boolean;
+begin
+  Result := innerAddItem(ikInt, UIntToStr(aValue), False)
+end;
+
+function cWriterJson.innerWriteInt64S(const aValue: Int64): Boolean;
+begin
+  Result := innerAddItem(ikInt, IntToStr(aValue), False)
+end;
+
+function cWriterJson.innerWriteInt64U(const aValue: UInt64): Boolean;
+begin
+  Result := innerAddItem(ikInt, UIntToStr(aValue), False)
+end;
+
+function cWriterJson.innerWriteNull: Boolean;
+begin
+  Result := innerAddItem(ikNull, 'null', False)
+end;
+
+function cWriterJson.innerWriteObjectEnd: Boolean;
+begin
+  Result := innerCheckAndClose(ikObject, -1, '}', False, 'innerWriteObjectEnd')
+end;
+
+function cWriterJson.innerWriteObjectStart: Boolean;
+begin
+  Result := innerAddItem(ikObject, '{', False)
+end;
+
+function cWriterJson.innerWritePairEnd: Boolean;
+begin
+  Result := innerCheckAndClose(ikPair, 2, '', False, 'innerWritePairEnd')
+end;
+
+function cWriterJson.innerWritePairStart: Boolean;
+ var
+  LItemNew, LItemCurrent: rItem;
+  LIndex: NativeInt;
+begin
+  if (fItems.Count > 0) then
+  begin
+    LIndex := Pred(fItems.Count);
+    LItemCurrent := fItems[LIndex];
+    case LItemCurrent.Kind of
+      ikObject: LItemCurrent.Child := LItemCurrent.Child + 1;
+      ikArray: LItemCurrent.Child := LItemCurrent.Child + 1;
+      else
+        raise Exception.CreateFmt(rsPairCannotBeAddedTo, [ItemKindName(LItemCurrent.Kind)]);
+    end;
+    fItems[LIndex] := LItemCurrent;
+    if (LItemCurrent.Child > 1) then
+      innerWriteStringIsQuoted(',', False);
+  end;
+
+  LItemNew.Child := 0;
+  LItemNew.Kind := ikPair;
+  fItems.Add(LItemNew);
+  Result := True;
+end;
+
+procedure cWriterJson.innerWriteStringIsQuoted(aString: String; const aIsQuotedString: Boolean);
+begin
+  if aIsQuotedString then
+    innerWriteStringRaw('"');
+  innerWriteStringRaw(innerStringEscapedRaw(aString));
+  if aIsQuotedString then
+    innerWriteStringRaw('"');
+end;
+
+function cWriterJson.innerWriteString(const aString: String): Boolean;
+begin
+  Result := innerAddItem(ikString, aString, True)
+end;
+
+function cWriterJson.innerWriteTime(const aTime: TTime): Boolean;
+begin
+  Result := innerAddItem(ikDateTime, FormatDateTime('hh:nn:ss', aTime), True)
+end;
+
+procedure cWriterJson.WritePairBool(const aKey: String; const aValue: Boolean);
+begin
+  WritePairStart;
+  WriteString(aKey);
+  WriteBool(aValue);
+  WritePairEnd
+end;
+
+procedure cWriterJson.WritePairFloat(const aKey: String; const aValue: Extended);
+begin
+  WritePairStart;
+  WriteString(aKey);
+  WriteExtended(aValue);
+  WritePairEnd
+end;
+
+procedure cWriterJson.WritePairIntS(const aKey: String; const aValue: Int64);
+begin
+  WritePairStart;
+  WriteString(aKey);
+  WriteInt64S(aValue);
+  WritePairEnd
+end;
+
+procedure cWriterJson.WritePairIntU(const aKey: String; const aValue: UInt64);
+begin
+  WritePairStart;
+  WriteString(aKey);
+  WriteInt64U(aValue);
+  WritePairEnd
+end;
+
+procedure cWriterJson.WritePairNull(const aKey: String);
+begin
+  WritePairStart;
+  WriteString(aKey);
+  WriteNull;
+  WritePairEnd
+end;
+
+procedure cWriterJson.WritePairString(const aKey, aValue: String);
+begin
+  WritePairStart;
+  WriteString(aKey);
+  WriteString(aValue);
+  WritePairEnd
+end;
+
+end.

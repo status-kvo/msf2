@@ -1,0 +1,553 @@
+﻿unit msfDbRawFbExportJson;
+
+interface
+
+uses
+  Types, SysUtils, Classes,
+  msfErrors, msfIOUtils,
+  msfEncodingBase64,
+  msfHashMd5,
+  msfWriters, msfWritersJson,
+  msfDbRawExport, msfDbRawExportJson,
+  msfDbRawFbApi, msfDbRawFbUtils;
+
+function DataSetExportJson(aFirebird: cFirebird; aQuery: ResultSet; aTransaction: Transaction; const aPkIds, aOlds: TStringDynArray; const aIsHash: Boolean;
+ const aBlockSize, aMaxFileSize: NativeUInt; const aCommand: Char; const aIdent: string; aEvent: cEventExport): NativeUInt;
+
+type
+  cExport = class
+   private
+    var fWriter: cWriterJson;
+   private
+    var fFirebird: cFirebird;
+   private
+    var fQuery: ResultSet;
+   private
+    var fTransaction: Transaction;
+   private
+    var fEvent: cEventExport;
+   private
+    var fIsHashCalc: Boolean;
+   private
+    var fMeta: MessageMetadata;
+   private
+    var fHash: cHashMd5Sealed;
+   private
+    var fPkIds, fOlds: TStringDynArray;
+   private
+    var fIdent: String;
+   private
+    procedure innerEventBlock;
+    procedure innerAddPkIds(aImportBase: cWriterJson);
+    procedure innerDmlField(const aData: TBytes; const aIndex: Cardinal; aWriter: cWriterJson);
+    function innerDmlRecord(const aData: TBytes): cWriterJson;
+    function innerDmlRecords(aBase: cWriterJson; aBlockSize: NativeUInt; const aMaxFileSize: NativeUInt): NativeUInt;
+   public
+    class procedure DDLField(const aIndex: Cardinal; aJson: cWriterJson; aMeta: MessageMetadata; aStatus: Status);
+    class procedure DDLFields(aJson: cWriterJson; aMeta: MessageMetadata; aStatus: Status; const aIsHashCalc: Boolean);
+   public
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
+implementation
+
+{$IFDEF msfDbRawExportLog}
+uses
+  msfAtomicity;
+
+var
+  fAtomicity: cAtomicity;
+
+procedure innerLog(const aHeader, aMessage: string);
+ var
+  LRow: String;
+  LDate: TDateTime;
+begin
+  fAtomicity.Lock;
+  try
+    LDate := Now;
+    LRow := FormatDateTime('hh:nn:ss.zzz', LDate) + #9 + aHeader.PadRight(38) + #9 + aMessage;
+    Writeln(LRow);
+  finally
+    fAtomicity.UnLock;
+  end;
+end;
+{$ENDIF}
+
+
+function DataSetExportJson(aFirebird: cFirebird; aQuery: ResultSet; aTransaction: Transaction; const aPkIds, aOlds: TStringDynArray; const aIsHash: Boolean;
+  const aBlockSize, aMaxFileSize: NativeUInt; const aCommand: Char; const aIdent: string; aEvent: cEventExport): NativeUInt;
+ var
+  LImportBase: cWriterJson;
+  LExport: cExport;
+begin
+  LExport := nil;
+  LImportBase := nil;
+  try
+    LImportBase := cWriterJsonSealed.Create(TMemoryStream.Create, True);
+    LImportBase.WriteObjectStart;
+    LImportBase.WritePairString('ident', aIdent);
+
+    LExport := cExport.Create;
+    LExport.fFirebird := aFirebird;
+    LExport.fQuery := aQuery;
+    LExport.fTransaction := aTransaction;
+    LExport.fIsHashCalc := aIsHash;
+    LExport.fEvent := aEvent;
+    LExport.fIdent := aIdent;
+    LExport.fOlds := aOlds;
+    LExport.fPkIds := aPkIds;
+
+    LExport.innerAddPkIds(LImportBase);
+    LImportBase.WritePairString('operation', aCommand);
+
+    LExport.fMeta := aQuery.getMetadata(aFirebird.Status);
+    FbException.checkException(aFirebird.Status);
+    LExport.DDLFields(LImportBase, LExport.fMeta, aFirebird.Status, LExport.fIsHashCalc);
+
+    LImportBase.WritePairStart;
+    LImportBase.WriteString('records');
+    LImportBase.WriteArrayStart;
+    Result := LExport.innerDmlRecords(LImportBase, aBlockSize, aMaxFileSize);
+  finally
+    LImportBase.Free;
+    LExport.Free;
+  end;
+end;
+
+{ cExport }
+
+constructor cExport.Create;
+begin
+  inherited Create;
+  fHash := nil;
+end;
+
+destructor cExport.Destroy;
+begin
+  fHash.Free;
+  fHash := nil;
+
+  fEvent.Free;
+  inherited;
+end;
+
+procedure cExport.innerAddPkIds(aImportBase: cWriterJson);
+ var
+  LId: String;
+begin
+  aImportBase.WritePairStart;
+  try
+    aImportBase.WriteString('pk_ids');
+    aImportBase.WriteArrayStart;
+    try
+      if (Length(fPkIds) = 0) then
+        Exit;
+      for LId in fPkIds do
+        aImportBase.WriteString(LId)
+    finally
+      aImportBase.WriteArrayEnd
+    end
+  finally
+    aImportBase.WritePairEnd
+  end
+end;
+
+procedure cExport.innerEventBlock;
+begin
+  fEvent.OnEvent(fWriter);
+  fWriter.Free;
+  fWriter := nil;
+end;
+
+class procedure cExport.DDLField(const aIndex: Cardinal; aJson: cWriterJson; aMeta: MessageMetadata; aStatus: Status);
+ var
+  LTypeI: Cardinal;
+  LKind: String;
+  LRaw: RawByteString;
+  LType: eFbType;
+begin
+  aJson.WriteObjectStart;
+  try
+    LRaw := RawByteString(aMeta.getAlias(aStatus, aIndex));
+    FbException.checkException(aStatus);
+
+    aJson.WritePairString('ident', String(LRaw));
+
+    LTypeI := aMeta.getType(aStatus, aIndex);
+    FbException.checkException(aStatus);
+
+    LType := eFbType(LTypeI);
+
+    case LType of
+      SQL_BOOLEAN:
+        LKind := 'boolean';
+      SQL_SHORT:
+        LKind := 'int16';
+      SQL_LONG:
+        LKind := 'int32';
+      SQL_INT64:
+        LKind := 'int64';
+      SQL_FLOAT:
+        LKind := 'double';
+      SQL_DOUBLE, SQL_D_FLOAT:
+        LKind := 'double';
+      SQL_DATE:
+        LKind := 'date';
+      SQL_TIME:
+        LKind := 'time';
+      SQL_TIMESTAMP:
+        LKind := 'datetime';
+      SQL_TEXT, SQL_VARYING:
+        LKind := 'varchar(' + IntToStr(aMeta.getLength(aStatus, aIndex)) + ')';
+      SQL_BLOB, SQL_QUAD:
+        if (aMeta.getSubType(aStatus, aIndex) = 1) then
+          LKind := 'text'
+        else
+          LKind := 'binary';
+      else
+        raise Exception.CreateFmt(rsUnknownType, [String(LRaw)]);
+    end;
+    FbException.checkException(aStatus);
+
+    aJson.WritePairString('kind', LKind);
+  finally
+    aJson.WriteObjectEnd
+  end;
+end;
+
+class procedure cExport.DDLFields(aJson: cWriterJson; aMeta: MessageMetadata; aStatus: Status; const aIsHashCalc: Boolean);
+ var
+  LIndex, LCount: Cardinal;
+begin
+  aJson.WritePairStart;
+  try
+    aJson.WriteString('fields');
+    aJson.WriteArrayStart;
+    try
+      LCount := aMeta.getCount(aStatus);
+      FbException.checkException(aStatus);
+
+      if (LCount > 0) then
+        for LIndex := 0 to Pred(LCount) do
+          DDLField(LIndex, aJson, aMeta, aStatus);
+
+      if (aIsHashCalc = False) then
+        Exit;
+
+      aJson.WriteObjectStart;
+      aJson.WritePairString('ident', 'source$hash');
+      aJson.WriteObjectEnd
+    finally
+      aJson.WriteArrayEnd
+    end;
+  finally
+    aJson.WritePairEnd
+  end;
+end;
+
+procedure cExport.innerDmlField(const aData: TBytes; const aIndex: Cardinal; aWriter: cWriterJson);
+ var
+  LStr, LFieldName: string;
+  LOffset, LSize: Cardinal;
+  LType: eFbType;
+  LBool: Boolean;
+  LInt64: Int64;
+  LRaw: RawByteString;
+  LExtended: Extended;
+  LDateTime: TDateTime;
+  LStream: TMemoryStream;
+begin
+  LStream := nil;
+
+  try
+    LOffset := fMeta.getNullOffset(fFirebird.Status, aIndex);
+    FbException.checkException(fFirebird.Status);
+
+    LRaw := RawByteString(fMeta.getAlias(fFirebird.Status, aIndex));
+    FbException.checkException(fFirebird.Status);
+    LFieldName := String(LRaw);
+
+    LBool := Boolean(Bool16Ptr(@aData[LOffset])^);
+    if LBool then
+    begin
+      aWriter.WritePairNull(LFieldName);
+      Exit
+    end;
+
+    LStr := '';
+
+    LSize := fMeta.getType(fFirebird.Status, aIndex);
+    FbException.checkException(fFirebird.Status);
+    LType := eFbType(LSize);
+
+    LOffset := fMeta.getOffset(fFirebird.Status, aIndex);
+    FbException.checkException(fFirebird.Status);
+
+    case LType of
+      SQL_BOOLEAN:
+      begin
+        LBool := Boolean(Bool16Ptr(@aData[LOffset])^);
+        aWriter.WritePairBool(LFieldName, LBool);
+        if (fIsHashCalc) then
+        begin
+          if LBool then
+            LStr := 'true'
+          else
+            LStr := 'false';
+          fHash.Update(LStr);
+        end;
+      end;
+
+      SQL_SHORT:
+      begin
+        LInt64 := ISC_SHORTPtr(@aData[LOffset])^;
+        aWriter.WritePairIntS(LFieldName, LInt64);
+        if (fIsHashCalc) then
+        begin
+          LStr := IntToStr(LInt64);
+          fHash.Update(LStr);
+        end;
+      end;
+
+      SQL_LONG:
+      begin
+        LInt64 := IntegerPtr(@aData[LOffset])^;
+        aWriter.WritePairIntS(LFieldName, LInt64);
+        if (fIsHashCalc) then
+        begin
+          LStr := IntToStr(LInt64);
+          fHash.Update(LStr);
+        end;
+      end;
+
+      SQL_INT64:
+      begin
+        LInt64 := IntegerPtr(@aData[LOffset])^;
+        aWriter.WritePairIntS(LFieldName, LInt64);
+        if (fIsHashCalc) then
+        begin
+          LStr := IntToStr(LInt64);
+          fHash.Update(LStr);
+        end;
+      end;
+
+      SQL_FLOAT:
+      begin
+        LExtended := PSingle(@aData[LOffset])^;
+        aWriter.WritePairFloat(LFieldName, LExtended);
+        if (fIsHashCalc) then
+        begin
+          LStr := FloatToStr(LExtended);
+          fHash.Update(LStr);
+        end;
+      end;
+
+      SQL_DOUBLE, SQL_D_FLOAT:
+      begin
+        LExtended := PDouble(@aData[LOffset])^;
+        aWriter.WritePairFloat(LFieldName, LExtended);
+        if (fIsHashCalc) then
+        begin
+          LStr := FloatToStr(LExtended);
+          fHash.Update(LStr);
+        end;
+      end;
+
+      SQL_DATE:
+      begin
+        LDateTime := fFirebird.IscDateToDate(ISC_DATEPtr(@aData[LOffset])^);
+        LStr := FormatDateTime('dd.mm.yyyy', LDateTime);
+        aWriter.WritePairString(LFieldName, LStr);
+        if (fIsHashCalc) then
+          fHash.Update(LStr);
+      end;
+
+      SQL_TIME:
+      begin
+        LDateTime := fFirebird.IscTimeToTime(ISC_TimePtr(@aData[LOffset])^);
+        LStr := FormatDateTime('hh:nn:ss', LDateTime);
+        aWriter.WritePairString(LFieldName, LStr);
+        if (fIsHashCalc) then
+          fHash.Update(LStr);
+      end;
+
+      SQL_TIMESTAMP:
+      begin
+        LDateTime := fFirebird.IscTimestampToDateTime(ISC_TIMESTAMPPtr(@aData[LOffset])^);
+        LStr := FormatDateTime('dd.mm.yyyy hh:nn:ss', LDateTime);
+        aWriter.WritePairString(LFieldName, LStr);
+        if (fIsHashCalc) then
+          fHash.Update(LStr);
+      end;
+
+      SQL_TEXT:
+      begin
+        LSize := fMeta.getLength(fFirebird.Status, aIndex);
+        FbException.checkException(fFirebird.Status);
+        SetLength(LRaw, LSize);
+        Move(aData[LOffset], LRaw[1], LSize);
+        LStr := TrimRight(String(LRaw));
+        aWriter.WritePairString(LFieldName, LStr);
+        if (fIsHashCalc) then
+          fHash.Update(LStr);
+      end;
+
+      SQL_VARYING:
+      begin
+        with cVarChar.Create(fFirebird.Status, fMeta, aIndex, @aData[0]) do
+          try
+            LStr := AsString;
+          finally
+            Free
+          end;
+
+        aWriter.WritePairString(LFieldName, LStr);
+        if (fIsHashCalc) then
+          fHash.Update(LStr);
+      end;
+
+      SQL_BLOB, SQL_QUAD:
+      begin
+        LStream := fFirebird.BlobToStream(ISC_QUADPtr(@aData[LOffset]), fTransaction);
+        LStr := cEncodingBase64.EncodeStreamToString(LStream);
+        aWriter.WritePairString(LFieldName, LStr);
+        if (fIsHashCalc) then
+        begin
+          LStream.Position := 0;
+          fHash.UpdateBuffer(LStream.Memory, LStream.Size);
+        end;
+      end;
+
+      else
+        raise Exception.CreateFmt(rsUnknownType, [LFieldName]);
+    end;
+  finally
+    LStream.Free
+  end
+end;
+
+function cExport.innerDmlRecord(const aData: TBytes): cWriterJson;
+ var
+  LIndex, LCount: Cardinal;
+  LRecord: cWriterJson;
+  LIndexPk: NativeInt;
+begin
+  LRecord := nil;
+  try
+    LRecord := cWriterJsonSealed.Create(rFile.OpenWrite(rPath.GetTempFileName, False, True), True);
+    LRecord.WriteObjectStart;
+    try
+      if fIsHashCalc then
+        fHash := cHashMd5Sealed.Create;
+
+      LCount := fMeta.getCount(fFirebird.Status);
+      FbException.checkException(fFirebird.Status);
+
+      if (LCount > 0) then
+        for LIndex := 0 to Pred(LCount) do
+          innerDmlField(aData, LIndex, LRecord);
+
+      LRecord.WritePairStart;
+      try
+        LRecord.WriteString('pk_old');
+        LRecord.WriteObjectStart;
+        for LIndexPk := Low(fPkIds) to High(fPkIds) do
+          LRecord.WritePairString(fPkIds[LIndexPk], fOlds[LIndexPk]);
+        LRecord.WriteObjectEnd
+      finally
+        LRecord.WritePairEnd
+      end;
+
+      if fIsHashCalc then
+        LRecord.WritePairString('source$hash', fHash.AsString)
+      else
+        LRecord.WritePairNull('source$hash')
+    finally
+      fHash.Free;
+      fHash := nil;
+      LRecord.WriteObjectEnd
+    end
+  except
+    LRecord.Free;
+    raise
+  end;
+
+  Result := LRecord
+end;
+
+function cExport.innerDmlRecords(aBase: cWriterJson; aBlockSize: NativeUInt; const aMaxFileSize: NativeUInt): NativeUInt;
+ var
+  LRecordIndexBlock, LFileSize {$IFDEF msfDbRawExportLog}, LRecordIndex{$ENDIF}: NativeUInt;
+  LData: TBytes;
+  LIsReCreate: Boolean;
+  LWriterRecord: cWriterJson;
+begin
+  Result := 0;
+  LRecordIndexBlock := 0;
+  fWriter := nil;
+  try
+    if (aBlockSize = 0) then
+      aBlockSize := aBlockSize.MaxValue;
+
+    SetLength(LData, fMeta.getMessageLength(fFirebird.Status));
+    LFileSize := 0;
+    {$IFDEF msfDbRawExportLog}LRecordIndex := 0;{$ENDIF}
+
+    while (fQuery.fetchNext(fFirebird.Status, @LData[0]) = Status.RESULT_OK) do
+    begin
+      Inc(Result);
+      Inc(LRecordIndexBlock);
+      {$IFDEF msfDbRawExportLog}Inc(LRecordIndex);{$ENDIF}
+
+      LIsReCreate := (LRecordIndexBlock > aBlockSize);
+      if (LIsReCreate = False) then
+        if (aMaxFileSize > 0) then
+          LIsReCreate := (LFileSize >= aMaxFileSize);
+
+      if LIsReCreate then
+      begin
+        innerEventBlock;
+        LRecordIndexBlock := 1;
+        LFileSize := 0;
+      end;
+
+      if (fWriter = nil) then
+      begin
+        fWriter := fEvent.WriterNew as cWriterJson;
+        fWriter.Assign(aBase);
+      end;
+
+      LWriterRecord := nil;
+      try
+        LWriterRecord := innerDmlRecord(LData);
+        if (fWriter.LastCommandChildCount > 0) then
+          fWriter.Source.{$IFDEF FPC}WriteByte{$ELSE}WriteData{$ENDIF}(Byte(','));
+        fWriter.Assign(LWriterRecord, 1);
+        LFileSize := LFileSize + LWriterRecord.Size;
+
+        {$IFDEF msfDbRawExportLog}
+        if ((LRecordIndex mod 100) = 0) then
+          innerLog(fIdent, format('Record[%d, size:%d], List[size:%d, childs: %d]', [LRecordIndex, LWriterRecord.Size, fWriter.Size, fWriter.LastCommandChildCount]));
+        {$ENDIF}
+      finally
+        LWriterRecord.Free
+      end;
+    end;
+  finally
+    if (fWriter <> nil) then
+      innerEventBlock
+  end;
+end;
+
+{$IFDEF msfDbRawExportLog}
+initialization
+  fAtomicity := cAtomicity.New;
+
+finalization
+  fAtomicity.Free;
+  fAtomicity := nil;
+{$ENDIF}
+
+end.

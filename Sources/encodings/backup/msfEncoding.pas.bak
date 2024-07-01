@@ -1,0 +1,24 @@
+﻿unit msfEncoding;
+
+interface
+
+uses
+  Classes;
+
+type
+  cEncoding = class abstract
+   public
+    class function EncodeStreamToString(aStream: TStream): String; virtual; abstract;
+    class function EncodeStringToString(const aText: string): String; virtual; abstract;
+  end;
+
+type
+  cDecoding = class abstract
+   public
+    //class function EncodeStreamToString(aStream: TStream): String; virtual; abstract;
+    class function EncodeStringToString(const aText: string): String; virtual; abstract;
+  end;
+
+implementation
+
+end.

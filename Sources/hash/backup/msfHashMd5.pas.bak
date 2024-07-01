@@ -1,0 +1,80 @@
+﻿unit msfHashMd5;
+
+interface
+
+uses
+  SysUtils,
+  {$IFDEF FPC}
+    md5,
+  {$ELSE}
+    System.Hash,
+  {$ENDIF}
+  msfHash;
+
+type
+  cHashMd5 = class(cHash)
+   private
+    {$IFDEF FPC}
+      fHash: TMD5Context;
+    {$ELSE}
+      var fHash: THashMD5;
+    {$ENDIF}
+   public
+    procedure Update(const aText: String); override;
+    procedure UpdateBuffer(const aData; aLength: NativeUInt); override;
+   public
+    function AsString: String; override;
+   public
+    constructor Create;
+  end;
+
+type
+  cHashMd5Sealed = class sealed(cHashMd5);
+
+implementation
+
+{ cHashMd5 }
+
+function cHashMd5.AsString: String;
+{$IFDEF FPC}
+ var
+  LResult: TMD5Digest;
+{$ENDIF}
+begin
+  {$IFDEF FPC}
+    MD5Final(fHash, LResult);
+    Result := MD5Print(LResult)
+  {$ELSE}
+    Result := fHash.HashAsString
+  {$ENDIF}
+end;
+
+constructor cHashMd5.Create;
+begin
+  inherited Create;
+  {$IFDEF FPC}
+    MD5Init(fHash);
+  {$ELSE}
+    fHash := THashMD5.Create;
+  {$ENDIF}
+end;
+
+procedure cHashMd5.Update(const aText: String);
+begin
+  {$IFDEF FPC}
+    MD5Update(fHash, PChar(aText)^, Length(aText))
+  {$ELSE}
+    fHash.Update(aText)
+  {$ENDIF}
+end;
+
+procedure cHashMd5.UpdateBuffer(const aData; aLength: NativeUInt);
+begin
+  {$IFDEF FPC}
+    MD5Update(fHash, aData, aLength)
+  {$ELSE}
+    fHash.Update(aData, aLength)
+  {$ENDIF}
+end;
+
+end.
