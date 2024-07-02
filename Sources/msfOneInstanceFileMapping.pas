@@ -13,14 +13,25 @@ uses
   {$IFDEF SUPPORTS_POSIX}
     //Posix.Base, Posix.Dlfcn, Posix.Fcntl, Posix.SysStat, Posix.SysTime, Posix.SysTypes, Posix.Locale,
   {$ENDIF SUPPORTS_POSIX}
-  SysUtils;
+  SysUtils, Classes;
 
 function IsOneInstance(const aName: string): Boolean;
+function IsOneInstanceFile(const aName, aPath: string): TStream;
 
 implementation
 
 const
   cMemFileSize = 1024;
+
+
+function IsOneInstanceFile(const aName, aPath: string): TStream;
+begin
+  try
+    Result := TFileStream.Create(IncludeTrailingPathDelimiter(aPath) + aName, fmCreate or fmOpenReadWrite, fmShareExclusive);
+  except
+    Result := nil;
+  end;
+end;
 
 {$IFDEF SUPPORTS_POSIX}
 const
