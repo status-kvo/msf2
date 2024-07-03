@@ -27,7 +27,7 @@ const
 function IsOneInstanceFile(const aName, aPath: string): TStream;
 begin
   try
-    Result := TFileStream.Create(IncludeTrailingPathDelimiter(aPath) + aName, fmCreate or fmOpenReadWrite, fmShareExclusive);
+    Result := TFileStream.Create(IncludeTrailingPathDelimiter(aPath) + aName, fmCreate or fmOpenReadWrite or fmShareExclusive);
   except
     Result := nil;
   end;

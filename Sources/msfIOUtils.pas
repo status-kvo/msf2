@@ -127,11 +127,11 @@ type
     class function OpenRead(const aPath: String): TFileStream; inline; static;
     class function OpenWrite(const aPath: String; const aIsPositionToEnd: Boolean; const aIsRemoveAfterClose: Boolean = False): TFileStream; static;
    public
-    class function ReadAllRaw(const aPath: String): RawByteString; inline; static;
+    class function ReadAllRaw(const aPath: String): RawByteString; {$IFNDEF DEBUG}inline;{$ENDIF DEBUG} static;
    public
-    class procedure WriteString(const aPath, aString: String; const aIsContinue: Boolean = False); inline; static;
+    class procedure WriteString(const aPath, aString: String; const aIsContinue: Boolean = False); {$IFNDEF DEBUG}inline;{$ENDIF DEBUG} static;
    public
-    class procedure WriteStringRaw(const aPath: String; const aString: RawByteString; const aIsContinue: Boolean = False); inline; static;
+    class procedure WriteStringRaw(const aPath: String; const aString: RawByteString; const aIsContinue: Boolean = False); {$IFNDEF DEBUG}inline;{$ENDIF DEBUG} static;
    public
     class function Remove(const aPath: String): Boolean; inline; static;
    public

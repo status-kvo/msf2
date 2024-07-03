@@ -3,7 +3,7 @@
 interface
 
 uses
-  Types, SysUtils, Classes, DateUtils,
+  Types, SysUtils, Classes,
   msfIOUtils,
   msfWriters, msfWritersJson,
   msfDbRawExport;
@@ -18,12 +18,14 @@ type
     var fBlockIndex: UInt32;
    private
     var fCreateFileComplite: Boolean;
+   private
+    var fIsExportByTemp: Boolean;
    public
     function WriterNew: cWriter; override;
    public
     procedure OnEvent(const aExportObject: Pointer); override;
    public
-    constructor Create(const aPath, aTableName: string; const aCreateFileComplite: Boolean);
+    constructor Create(const aPath, aTableName: string; const aIsCreateFileComplite, aIsExportByTemp: Boolean);
     destructor Destroy; override;
   end;
 
@@ -34,21 +36,24 @@ type
    private
     var fIdent: String;
    private
+    var fMovePath: String;
+   private
     var fCreateFileComplite: Boolean;
    public
-    constructor Create(aSource: TStream; const aIsOwner: Boolean; const aIdent: String; aCreateFileComplite: Boolean);
+    constructor Create(aSource: TStream; const aIsOwner: Boolean; const aIdent, aMovePath: String; aIsCreateFileComplite: Boolean);
     destructor Destroy; override;
   end;
 
 { cEventExportJson }
 
-constructor cEventExportJson.Create(const aPath, aTableName: string; const aCreateFileComplite: Boolean);
+constructor cEventExportJson.Create(const aPath, aTableName: string; const aIsCreateFileComplite, aIsExportByTemp: Boolean);
 begin
   inherited Create;
   fPath := aPath;
   fTableName := aTableName;
   fBlockIndex := 0;
-  fCreateFileComplite := aCreateFileComplite
+  fCreateFileComplite := aIsCreateFileComplite;
+  fIsExportByTemp := aIsExportByTemp;
 end;
 
 destructor cEventExportJson.Destroy;
@@ -69,38 +74,60 @@ end;
 function cEventExportJson.WriterNew: cWriter;
  var
   LStream: TStream;
-  LIdent: String;
+  LBlockIndex: UInt32;
+  LFilePath, LPath: String;
 begin
-  LIdent := IntToStr(DateTimeToUnix(Now, False));
-  LIdent := LIdent.PadLeft(20, '0');
+  LBlockIndex := {$IFDEF FPC}InterlockedIncrement{$ELSE}AtomicIncrement{$ENDIF}(fBlockIndex);
 
-  LIdent := Format('%s_%s_%d', [LIdent, fTableName, {$IFDEF FPC}InterlockedIncrement{$ELSE}AtomicIncrement{$ENDIF}(fBlockIndex)]);
+  LPath := '';
+  if fIsExportByTemp then
+  begin
+    LFilePath := PathTmp(fPath);
+    LPath := fPath
+  end
+  else
+    LFilePath := fPath;
 
-  LStream := rFile.OpenWrite(fPath + LIdent + '.json', False);
+  LFilePath := GenerateFileName(LFilePath, fTableName, LBlockIndex);
+  LStream := rFile.OpenWrite(LFilePath, False);
   LStream.Size := 0;
-  Result := cWriterJsonExport.Create(LStream, True, LIdent, fCreateFileComplite);
+
+  Result := cWriterJsonExport.Create(LStream, True, LFilePath, LPath, fCreateFileComplite);
 end;
 
 { cWriterJsonExport }
 
-constructor cWriterJsonExport.Create(aSource: TStream; const aIsOwner: Boolean; const aIdent: String; aCreateFileComplite: Boolean);
+constructor cWriterJsonExport.Create(aSource: TStream; const aIsOwner: Boolean; const aIdent, aMovePath: String; aIsCreateFileComplite: Boolean);
 begin
   inherited Create(aSource, aIsOwner);
   fIdent := aIdent;
-  fCreateFileComplite := True
+  fMovePath := aMovePath;
+  fCreateFileComplite := aIsCreateFileComplite
 end;
 
 destructor cWriterJsonExport.Destroy;
  var
   LFile: TFileStream;
-  LPath: String;
+  LPath, LPathTemp: String;
+  LIsExportByTemp: Boolean;
 begin
   LPath := '';
+  LPathTemp := '';
+
   if fCreateFileComplite then
     if (fSource is TFileStream) then
       LPath := TFileStream(fSource).FileName + '.completed';
 
+  if (fMovePath > '') then
+    if (fSource is TFileStream) then
+      LPathTemp := TFileStream(fSource).FileName;
+
   inherited;
+
+  if (fMovePath > '') then
+    if (LPathTemp > '') then
+      if (rFile.Move(LPathTemp, fMovePath, True) = False) then
+        raise Exception.Create('Error file tmp to export path');
 
   if (LPath = '') then
     Exit;
