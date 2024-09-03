@@ -7,8 +7,8 @@
 unit msfDbRawFbApi;
 
 {$IFDEF FPC}
-{$MODE DELPHI}
-{$OBJECTCHECKS OFF}
+  {$MODE DELPHI}
+  {$OBJECTCHECKS OFF}
 {$ENDIF}
 
 interface

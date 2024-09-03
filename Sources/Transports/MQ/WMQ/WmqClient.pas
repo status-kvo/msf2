@@ -60,6 +60,7 @@ type
     function innerGetMessage(const aGetMode: Int32): Int32;
 
     function IsMQRFH2Message: Boolean;//проверка, что тело сообщения начинается с MQRFH2 заголовка
+    function IsMQRFH1Message: Boolean;//проверка, что тело сообщения начинается с MQRFH заголовка
     procedure CutMQRFH2Header;
     procedure CopyFromBuffer;
     //function SaveMessageWithDescriptor: string;
@@ -149,7 +150,7 @@ var
   LValueStr : AnsiString;
 begin
   //Отбрасывание JMS заголовка если есть
-  if IsMQRFH2Message then
+  if IsMQRFH2Message or IsMQRFH1Message then
     CutMQRFH2Header;
   SetLength(LValueStr, fDataLength);
 
@@ -180,12 +181,12 @@ begin
   begin
     //в Utf16 обратный порядок байт, нужен swap, чтобы обменять байты у word
     LongRec(aInteger).Hi := swap(PWORD(@aData[0])^);
-    LongRec(aInteger).Lo := swap(PWORD(@aData[1])^);
+    LongRec(aInteger).Lo := swap(PWORD(@aData[2])^);
   end
   else
   begin
     LongRec(aInteger).Lo := PWORD(@aData[0])^;
-    LongRec(aInteger).Hi := PWORD(@aData[1])^;
+    LongRec(aInteger).Hi := PWORD(@aData[2])^;
   end;
 
   Result := True;
@@ -193,42 +194,52 @@ end;
 
 procedure TMQClient.CutMQRFH2Header;
  var
-  LHeaderLength, LByteOrder: Integer;
+  LValue, LByteOrder: Integer;
   LHeaderId: AnsiString;
-  LHeaderLengthArray: TBytes;
+  LData: PAnsiChar;
   LDirectByteOrder: Boolean;
+  LLog: TStringList;
 begin
-  LHeaderLengthArray := [];
+  LLog := nil;
   try
-    SetLength(LHeaderId, 4);
-    Move(fBufferData[0], LHeaderId[1], 4);
-    if (LHeaderId <> 'RFH ') then
-      Exit;
+    LLog := TStringList.Create;
+    try
+      LData := @fBufferData[0];
+      SetLength(LHeaderId, 4);
+      Move(LData[0], LHeaderId[1], 4);
+      if (LHeaderId <> 'RFH ') then
+        Exit;
 
-    SetLength(LHeaderLengthArray, 4);
-    Move(fBufferData[4], LHeaderLengthArray[0], 4);
+      LByteOrder := fMessageDescription.Encoding and MQENC_INTEGER_MASK;
+      if (LByteOrder <> 1) and (LByteOrder <> 2) then
+        raise Exception.Create(rsUnknownMqMDEncodingValue);
+      LDirectByteOrder := (LByteOrder = 1);
 
-    LByteOrder := fMessageDescription.Encoding and MQENC_INTEGER_MASK;
-    if (LByteOrder <> 1) and (LByteOrder <> 2) then
-      raise Exception.Create(rsUnknownMqMDEncodingValue);
+      if (PCharToInteger(@LData[4], LValue, LDirectByteOrder) = False) then
+        Exit;
 
-    LDirectByteOrder := (LByteOrder = 1);
+      if (LByteOrder <> 1) and (LByteOrder <> 2) then
+        raise Exception.Create(rsUnknownMqMDEncodingValue);
+      LDirectByteOrder := (LByteOrder = 1);
 
-    if (PCharToInteger(@LHeaderLengthArray[0], LHeaderLength, LDirectByteOrder) = False) then
-       Exit;
+      if (PCharToInteger(@LData[8], LValue, LDirectByteOrder) = False) then
+         Exit;
 
-    if (LHeaderLength >= fDataLength) then
-      raise Exception.Create(rsIncorrectRFHLength);
+      if (LValue >= fDataLength) then
+        raise Exception.Create(rsIncorrectRFHLength);
 
-    fDataLength := fDataLength - LHeaderLength;
-    Move(fBufferData[Ceil(LHeaderLength / 2)], fBufferData[0], fDataLength);
-  except
-    on E: Exception do
-    begin
-      {$message 'Сделай Log'}
-      //FLog.Add('CutMQRFH2Header error: ' + E.Message, -1);
-      //FLog.Add('MQMD: ' + SaveMessageWithDescriptor, -2);
+      fDataLength := fDataLength - LValue;
+      Move(LData[LValue], LData[0], fDataLength);
+    except
+      on E: Exception do
+      begin
+        {$message 'Сделай Log'}
+        //FLog.Add('CutMQRFH2Header error: ' + E.Message, -1);
+        //FLog.Add('MQMD: ' + SaveMessageWithDescriptor, -2);
+      end;
     end;
+  finally
+    LLog.Free;
   end;
 end;
 
@@ -636,6 +647,24 @@ begin
   innerDisconnect;
   fUserPassword := AnsiString(aUserPassword);
   innerUserDataUpdate;
+end;
+
+function TMQClient.IsMQRFH1Message: Boolean;
+var
+  LFormatAnsi: AnsiString;
+  LFormatUnicode: String;
+begin
+  SetLength(LFormatAnsi, 4);
+  Move(fMessageDescription.Format[0], LFormatAnsi[1], 4);
+
+  LFormatUnicode := Trim(String(LFormatAnsi));
+  Result := LFormatUnicode = Trim('RFH ');
+  if Result then
+    Exit;
+
+  SetLength(LFormatAnsi, 4);
+  Move(fBufferData[0], LFormatAnsi[1], 4);
+  Result := (LFormatAnsi = 'RFH ')
 end;
 
 function TMQClient.IsMQRFH2Message: Boolean;
